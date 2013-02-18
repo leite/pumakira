@@ -4,11 +4,11 @@ Pumakira is a html parser and [css selector](http://www.w3.org/TR/selectors/) en
 
 # WTF pumakira means?
 
-Pumakira is a combination of two words in [nheengatu](http://en.wikipedia.org/wiki/Nheengatu_language): *puu* (harvest) and *makira* (web)
+Pumakira is a combination of two [nheengatu](http://en.wikipedia.org/wiki/Nheengatu_language) words: *puú* (harvest) and *makira* (web)
 
 # Help and Support
 
-Please fill a issue or help making a clone and the a push request
+Please fill an issue or help it doing a clone and then a pull request
 
 # License
 
@@ -30,7 +30,8 @@ Please fill a issue or help making a clone and the a push request
                   <body>
                     <h1 class='main'>main title</h1>
                     <div class='main'>
-                      <p>foo text</p> <p>foo continue...</p> <blockquote id='blocks'>Prof. Lorem Ipsum</blockquote>
+                      <p>foo text</p> <p>foo continue...</p> 
+                      <blockquote id='blocks'>Prof. Lorem Ipsum</blockquote>
                       <ul class='main'>
                         <li>fool</li>
                       </ul>
@@ -52,10 +53,14 @@ Please fill a issue or help making a clone and the a push request
     
     instance:get_parent_node(instance:get_element_by_id('blocks'))  -- get node's parent
 
-    -- add "pseudo" filter, requires name and filters method and mode - true for iterative or false for after ... default true
+    --[[
+      add "pseudo" filter, 
+      requires name and filters method and mode 
+        - true for iterative or false for after ... default true
+    --]]
     instance:add_filter(                                            
-      'ipsum', 
-      function(index, value, context_element)
+      'lorem', 
+      function(index, value, context_element_or_elements_table)
         -- code here
       end,
       true
