@@ -1,11 +1,11 @@
-local s, t, m, o = require 'string', require 'table', require 'math', require 'os'
+local s, t, m, o, u = require 'string', require 'table', require 'math', require 'os', require './utils'
 
-local match, gsub, insert, remove, find, sub, len, lower, mod, rnd_seed, rnd, time
-  = s.match, s.gsub, t.insert, t.remove, s.find, s.sub, s.len, s.lower, m.mod, m.randomseed, m.random, o.time
+local match, gsub, insert, remove, concat, find, sub, len, lower, mod, rnd_seed, rnd, time, dump
+  = s.match, s.gsub, t.insert, t.remove, t.concat, s.find, s.sub, s.len, s.lower, m.mod, m.randomseed, m.random, o.time, u.dump
 
-s, t, m, o = nil, nil, nil, nil
+s, t, m, o, u = nil, nil, nil, nil, nil
     
-local pumakira, filters = {}, {}
+local pumakira, filters, var_dump = {}, {}, require('utils').dump
 
 -- element mode, see http://www.w3schools.com/dom/dom_nodetype.asp
 local mode = {
@@ -44,8 +44,13 @@ local empty_tags = {
   ['!doctype'] = true
 }
 
+
 local function log(...)
-  --p(...)
+  local args, i = {...}, 1
+  for i=1, #args do
+    args[i] = dump(args[i], 2)
+  end
+  process.stdout:write(concat(args, "\t") .. "\n")
 end
 
 local function include(table, value)
@@ -55,7 +60,7 @@ local function include(table, value)
   return each(table, each_pairs_match)==true
 end
 
-local function concat(table, second_table)
+local function concatenate(table, second_table)
   for k,v in pairs(second_table) do 
     if type(k)=='number' then insert(table, v) else table[k] = v end 
   end
@@ -89,53 +94,34 @@ local function get_test(check_val)
   return function(value) return not value and false or (value==check_val) end
 end
 
-local function make_value_checker(operator, value)
-  value = type(value)=='string' and value or ''
-  local operators = {
-      ['=']  = function(test_value) return test_value==value end,
-      ['~='] = function(test_value) return test_value and find(value, test_value)~=nil          or false end,
-      ['^='] = function(test_value) return test_value and sub(test_value, 1, len(value))==value or false end,
-      ['$='] = function(test_value) return test_value and sub(test_value, -1*len(value))==value or false end,
-      ['*='] = function(test_value) return test_value and find(value, test_value)~=nil          or false end,
-      ['|='] = function(test_value) return test_value and (test_value==value or sub(test_value, 1, len(value)+1)==value..'-') or false end
-    }
-  return operator and operators[operator] or (function(test_value) return test_value and true or false end)
-end
-  
-filters = {
+local filters = {
   iterative = {
-    contains = function(index, val, ctx)
-      if ctx.type==mode.tag then
-        if #ctx.children>0 then
-          return (ctx.children[1].type==mode.text and ctx.children[1].data) and (find(ctx.children[1].data, val) and true or false) or false
-        end
-      end
-      return false
-    end,
-    header   = function(index, val, ctx) return match(ctx.name, "^h%d$")~=nil end,
-    empty    = function(index, val, ctx) return ctx.type==mode.tag and #ctx.children==0 or false end,
-    eq       = function(index, val)      return index==val end,
-    gt       = function(index, val)      return index>val end,
-    lt       = function(index, val)      return index<val end,
-    even     = function(index)           return mod(index, 2)==1 end,
-    odd      = function(index)           return mod(index, 2)==0 end,
-    first    = function(index)           return index==1 end
+    contains = "(e.type~=mode.tag and false or (#e.children<1 and (e.children[1].type==mode.text and e.children[1].data)"..
+               ' and (find(e.children[1].data, "$val") and true or false) or false))',
+    header   = "match(e.name, \"^h%d$\")~=nil",
+    empty    = "(e.type==mode.tag and #e.children==0 or false)",
+    eq       = "$i==$val",
+    gt       = "$i>$val",
+    lt       = "$i<$val",
+    even     = "mod($i, 2)==1",
+    odd      = "mod($i, 2)==0",
+    first    = "$i==1"
   },
-
   after = {
     last     = function(_, val, ctx)
       return index==nil and (#ctx==0 and {} or (#ctx>1 and ctx[#ctx-1] or ctx[#ctx])) or true
     end
   }
-} 
+}
 
-local function r(x, i)
-  local s = ('  '):rep(i)
-  for k,v in pairs(x) do
-    print(s .. tostring(k) .. ' = ' .. tostring(v))
-    if type(v) == "table" then r(v, i+1) end
-  end
-end
+local operations = {
+  ['=']  = '$test=="$val"',
+  ['~='] = 'find(" $val ", $test)~=nil',
+  ['^='] = 'not (sub($test, 1, len("$val"))=="$val")',
+  ['$='] = 'not (sub($test, -1*len("$val"))=="$val")',
+  ['*='] = 'find("$val", $test)~=nil',
+  ['|='] = 'not ($test=="$val" or sub($test, 1, len("$val")+1)=="$val".."-")'
+}
 
 local function parse_attributes(element_fragment)
   local attributes = {}
@@ -148,52 +134,59 @@ local function parse_attributes(element_fragment)
   return attributes
 end
 
-local function parse_selector_nodes(fragment, tester)
+local function parse_selector_nodes(fragment, attrs)
   local nodes_iterator = function(id_or_class, node)
-    if id_or_class=="" and node=="" then return end
-    if id_or_class=="#" then
-      tester.id       = node
-    elseif id_or_class=="." then
-      tester.class    = node
+    if id_or_class=='' and node=='' then return end
+    if id_or_class=='#' then
+      insert(attrs, {{'id', '=', node}})
+    elseif id_or_class=='.' then
+      insert(attrs, {{'class', '*=', node}})
     else 
-      tester.tag_name = node
+      insert(attrs, {{'tag_name', '=', node}})
     end
   end
   gsub(fragment, "([#%.]?)([^#?%.?%s?$?]*)", nodes_iterator)
 end
 
-local function parse_selector_attributes(fragment, tester)
+local function parse_selector_attributes(fragment, attrs, pseudos, pseudo) -- tester
+  local attributes = {}
   local attrs_iterator = function(_, attr, operator, _, value)
     if attr=="" and operator=="" and value=="" then return end
     if operator=="" and value=="" then
-      tester.attr = attr
-    else 
-      tester.test = make_value_checker(operator, value)
+      insert(pseudos, {pseudo, attr})
+    else
+      insert(attributes, {attr, operator, value}) -- make_value_checker
     end
   end
-  gsub(fragment, "([\"']?)([^~?|?%^?%$?%*?=?\"?'?,?$?]*)([~|%^%$%*=]*)([\"']?)([^%1?%4?,?$?]*)%1%4%s*,?%s*", attrs_iterator)
+  if fragment=='' then
+    if pseudo~='' then
+      insert(pseudos, {pseudo, ''})
+    end
+  else
+    gsub(fragment, "([\"']?)([^~?|?%^?%$?%*?=?\"?'?,?$?]*)([~|%^%$%*=]*)([\"']?)([^%1?%4?,?$?]*)%1%4%s*,?%s*", attrs_iterator)
+  end
+  if #attributes>0 then
+    insert(attrs, attributes)
+  end
 end
 
 local function parse_selector(selector)
   -- consider using LPEG ...
-  local inits, _inits, ends, _ends, relation, _relation, nodes, _nodes, __, pseudo, _pseudo, content, last_ending, parsed_selector = 
-        1, 1, 1, 1, '', '', '', '', '', '', '', '', 1, {}
-
-  while true do
+  local inits, _inits, ends, _ends, relation, _relation, nodes, _nodes, __, pseudo, _pseudo, content, last_ending, parsed_selector, x = 
+        1, 1, 1, 1, '', '', '', '', '', '', '', '', 1, {}, 1
+  -- a hundred conditions blocks, i think its fair ... safe way against pattern bug
+  for x=1, 100 do
     -- matches 'p' 'p:first' ...'>div' ...'+div:last'
-    _inits, _ends, _relation, __, _nodes, _pseudo = find(selector, "%s*([%+~>]?)%s*(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*)%s*[%+~>]?%s*", last_ending)
+    _inits, _ends, _relation, __, _nodes, _pseudo = find(selector, "([%s%+~>]*)(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*)", last_ending)
     -- matches 'p:eq(1)' ':contains("the invaluable darkness")' '>div[class="boredoom", alt~="nil"]' '[attr="foo bar"]'
-    inits, ends, relation, nodes, pseudo, content = find(selector, "%s*([%+~>]?)%s*([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?%s*[%+~>]?%s*", last_ending)
-
+    inits, ends, relation, nodes, pseudo, content = find(selector, "([%s%+~>]*)([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?", last_ending)
+    -- end loop when theres nothing to parse anymore or high number of loops, wich indicates error :(
     if inits==nil and _inits==nil then
       break
     end
-
-    local tester = {}
-    
     -- fix node+attr+pseudo occurences
     if __==":" then _pseudo = _nodes _nodes  = '' end
-
+    -- check which pattern achieved result or best result
     if inits==nil then
       relation, nodes, pseudo, ends, content = _relation, _nodes, _pseudo, _ends, ''
     else
@@ -203,14 +196,100 @@ local function parse_selector(selector)
         end
       end
     end
-
-    tester.relation, tester.pseudo, last_ending = relation, pseudo, ends+1
-    parse_selector_nodes(nodes, tester)
-    parse_selector_attributes(content, tester)
-    insert(parsed_selector, tester)
+    --
+    --p(relation, nodes, pseudo, ends, content)
+    -- join conditions/pseudos when possible
+    if relation=='' and x>1 then
+      parse_selector_nodes(nodes, parsed_selector[#parsed_selector].nodes_attr)
+      parse_selector_attributes(content, parsed_selector[#parsed_selector].attrs, parsed_selector[#parsed_selector].pseudos, pseudo)
+    else 
+      local test = {relation='', attrs={}, nodes_attr={}, pseudos={}}
+      test.relation = relation
+      parse_selector_nodes(nodes,   test.nodes_attr)
+      parse_selector_attributes(content, test.attrs, test.pseudos, pseudo)
+      insert(parsed_selector, test)
+    end
+    last_ending = ends+1
   end
 
+  log(parsed_selector)
+  --log("sas sasa \n\n \t\tsds\t")
   return parsed_selector
+end
+
+-- make value checker for pseusos
+local function make_pseudo_checker(pseudo, value, index_var_name)
+  if filters.iterative[pseudo] then
+    return gsub(gsub(filters.iterative[pseudo], "%$i", index_var_name), "%$val", value)
+  end
+end
+
+-- make value checker for attributes
+local function make_value_checker(tester, operator, value)
+  return operations[operator] and gsub(gsub(operations[operator], "%$val", value), "%$test", tester) or tester
+end
+
+-- generate code for pseudos
+local function generate_code_for_pseudos(pseudos, first_code_block, main_code_block)
+  local counter_var, counter, i = '', 'local ', 0 
+  for i=1, #pseudos do
+    counter_var      = '_'..char(i+96)
+    counter          = counter.. (i==1 and '' or ', ')..counter_var
+    first_code_block = first_code_block .. (i==1 and '0' or ', 0')
+    main_code_block  = main_code_block .. format(
+        "\n    %s = %s+1\n    if not(%s) then return false end \n",
+        counter_var,
+        counter_var,
+        make_pseudo_checker(pseudos[i][1], pseudos[i][2], counter_var)
+      )
+  end
+  return counter .. ' = ' .. first_code_block, main_code_block
+end
+
+-- generate code for attributes
+local function generate_code_for_attributes(attrs, generated_code)
+  local i, x, child_length, is_or_condional = 0, 0, 0, false
+  generated_code = generated_code .. '\n    if '
+  for i=1, #attrs do
+    child_length    = #attrs[i]
+    is_or_condional = child_length > 1
+    p(is_or_condional)
+    generated_code  = generated_code .. (is_or_condional and '(' or '')
+    for x=1, child_length do
+      generated_code = generated_code .. format(
+          (attrs[i][x][1]=='tag_name' and '(e.%s and %s)%s' or '(e.attributes["%s"] and %s)%s'), 
+          attrs[i][x][1],
+          make_value_checker(
+            format((attrs[i][x][1]=='tag_name' and 'e.%s' or 'e.attributes["%s"]'), attrs[i][x][1]),
+            attrs[i][x][2],
+            attrs[i][x][3]
+          ),
+          (is_or_condional and (child_length==x and (#attrs==i and ')' or ') and ') or ' or ') or (#attrs==i and '' or ' and ') )
+        )
+    end
+  end
+  return generated_code .. " then else return false end\n"
+end
+
+-- generate code and evaluate to comparator closure
+local function generate_and_evaluate_code(parsed_section)
+  local first_block, middle_block, last_block = '', '', ''
+  
+  if parsed_section.nodes_attr and #parsed_section.nodes_attr>1 then
+    middle_block = generate_code_for_attributes(parsed_section.nodes_attr, middle_block)
+  end
+
+  if parsed_section.attrs and #parsed_section.attrs>1 then
+    middle_block = generate_code_for_attributes(parsed_section.attrs, middle_block)
+  end
+
+  if parsed_section.pseudos and #parsed_section.pseudos>1 then
+    first_block, last_block = generate_code_for_pseudos(parsed_section.pseudos, first_block, last_block)
+  end
+
+  local method = loadstring("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "  end\n  return cmp\nend\nreturn fn_cmp()")
+  local env    = {mode=mode, find=find}
+  return method and setfenv(method(), env) or nil
 end
 
 local function gen_unique_id(seed)
@@ -225,7 +304,7 @@ function pumakira.new()
   this = {
     
     dump  = function(self, x)
-      r(x, 0)  
+      log(x)
     end,
 
     add_filter = function(self, name, fn, is_iterative)
@@ -292,9 +371,9 @@ function pumakira.new()
           end
         elseif c == "" then   -- start tag
           top = {
-            name       = lower(label), 
-            attributes = parse_attributes(xarg), 
-            type       = mode.tag, 
+            name       = lower(label),
+            attributes = parse_attributes(xarg),
+            type       = mode.tag,
             parent     = 0,
             unique_id  = unique_id,
             children   = {}
@@ -381,7 +460,7 @@ function pumakira.new()
         end
       end
       if self:test_element(options, current_element) then
-        log('found ... inserting', current_element, found)
+        --log('found ... inserting', current_element, found)
         insert(found, current_element)
       end
       if limit>-1 and #found>=limit then
@@ -395,7 +474,7 @@ function pumakira.new()
         return found
       end
       for i=1, #element_list do
-        found = concat(found, self:get_elements(options, element_list[i], recurse, limit))
+        found = concatenate(found, self:get_elements(options, element_list[i], recurse, limit))
         if limit>-1 and #found>=limit then
           return found
         end
@@ -446,10 +525,16 @@ function pumakira.new()
 
       local parsed_selector = parse_selector(selector)
 
+      --log("ha!")
+      --log(2000)
+      --log(true)
+      --log({foo = "bar\t\r"})
+
       --self:dump(parsed_selector)
 
       for i=1, #parsed_selector do
-        p(parsed_selector[i])
+        ---p(' + + + + ')
+        --self:dump(parsed_selector[i])
       end
 
     end,
