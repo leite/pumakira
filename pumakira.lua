@@ -1,7 +1,7 @@
 local s, t, m, o, u = require 'string', require 'table', require 'math', require 'os', require './utils'
 
-local match, gsub, insert, remove, concat, find, sub, len, lower, mod, rnd_seed, rnd, time, dump
-  = s.match, s.gsub, t.insert, t.remove, t.concat, s.find, s.sub, s.len, s.lower, m.mod, m.randomseed, m.random, o.time, u.dump
+local match, gsub, char, format, insert, remove, concat, find, sub, len, lower, mod, rnd_seed, rnd, time, dump
+  = s.match, s.gsub, s.char, s.format, t.insert, t.remove, t.concat, s.find, s.sub, s.len, s.lower, m.mod, m.randomseed, m.random, o.time, u.dump
 
 s, t, m, o, u = nil, nil, nil, nil, nil
     
@@ -115,6 +115,7 @@ local filters = {
 }
 
 local operations = {
+  ['*']  = '',
   ['=']  = '$test=="$val"',
   ['~='] = 'find(" $val ", $test)~=nil',
   ['^='] = 'not (sub($test, 1, len("$val"))=="$val")',
@@ -142,7 +143,7 @@ local function parse_selector_nodes(fragment, attrs)
     elseif id_or_class=='.' then
       insert(attrs, {{'class', '*=', node}})
     else 
-      insert(attrs, {{'tag_name', '=', node}})
+      insert(attrs, {{'name', '=', node}})
     end
   end
   gsub(fragment, "([#%.]?)([^#?%.?%s?$?]*)", nodes_iterator)
@@ -153,7 +154,11 @@ local function parse_selector_attributes(fragment, attrs, pseudos, pseudo) -- te
   local attrs_iterator = function(_, attr, operator, _, value)
     if attr=="" and operator=="" and value=="" then return end
     if operator=="" and value=="" then
-      insert(pseudos, {pseudo, attr})
+      if pseudo=="" then
+        insert(attributes, {attr, "*", ''})
+      else
+        insert(pseudos, {pseudo, attr})
+      end
     else
       insert(attributes, {attr, operator, value}) -- make_value_checker
     end
@@ -177,13 +182,14 @@ local function parse_selector(selector)
   -- a hundred conditions blocks, i think its fair ... safe way against pattern bug
   for x=1, 100 do
     -- matches 'p' 'p:first' ...'>div' ...'+div:last'
-    _inits, _ends, _relation, __, _nodes, _pseudo = find(selector, "([%s%+~>]*)(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*)", last_ending)
+    _inits, _ends, _relation, __, _nodes, _pseudo = find(selector, "%s*([%+~>]*)%s*(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*)", last_ending)
     -- matches 'p:eq(1)' ':contains("the invaluable darkness")' '>div[class="boredoom", alt~="nil"]' '[attr="foo bar"]'
-    inits, ends, relation, nodes, pseudo, content = find(selector, "([%s%+~>]*)([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?", last_ending)
+    inits, ends, relation, nodes, pseudo, content = find(selector, "%s*([%+~>]*)%s*([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?", last_ending)
     -- end loop when theres nothing to parse anymore or high number of loops, wich indicates error :(
     if inits==nil and _inits==nil then
       break
     end
+    --p(relation, nodes, pseudo, ends, content, _relation, _nodes, _pseudo, _ends, _content)
     -- fix node+attr+pseudo occurences
     if __==":" then _pseudo = _nodes _nodes  = '' end
     -- check which pattern achieved result or best result
@@ -197,7 +203,7 @@ local function parse_selector(selector)
       end
     end
     --
-    --p(relation, nodes, pseudo, ends, content)
+    --p(relation, nodes, pseudo, ends, content, _relation, _nodes, _pseudo, _ends, _content)
     -- join conditions/pseudos when possible
     if relation=='' and x>1 then
       parse_selector_nodes(nodes, parsed_selector[#parsed_selector].nodes_attr)
@@ -211,9 +217,6 @@ local function parse_selector(selector)
     end
     last_ending = ends+1
   end
-
-  log(parsed_selector)
-  --log("sas sasa \n\n \t\tsds\t")
   return parsed_selector
 end
 
@@ -253,14 +256,15 @@ local function generate_code_for_attributes(attrs, generated_code)
   for i=1, #attrs do
     child_length    = #attrs[i]
     is_or_condional = child_length > 1
-    p(is_or_condional)
     generated_code  = generated_code .. (is_or_condional and '(' or '')
     for x=1, child_length do
       generated_code = generated_code .. format(
-          (attrs[i][x][1]=='tag_name' and '(e.%s and %s)%s' or '(e.attributes["%s"] and %s)%s'), 
+          (attrs[i][x][1]=='name' and '(e.%s and %s)%s' or 
+            (attrs[i][x][2]=='*' and '(e.attributes["%s"]%s)%s' or '(e.attributes["%s"] and %s)%s')
+          ), 
           attrs[i][x][1],
           make_value_checker(
-            format((attrs[i][x][1]=='tag_name' and 'e.%s' or 'e.attributes["%s"]'), attrs[i][x][1]),
+            format((attrs[i][x][1]=='name' and 'e.%s' or 'e.attributes["%s"]'), attrs[i][x][1]),
             attrs[i][x][2],
             attrs[i][x][3]
           ),
@@ -273,22 +277,22 @@ end
 
 -- generate code and evaluate to comparator closure
 local function generate_and_evaluate_code(parsed_section)
-  local first_block, middle_block, last_block = '', '', ''
-  
-  if parsed_section.nodes_attr and #parsed_section.nodes_attr>1 then
+  local first_block, middle_block, last_block, method, env = '', '', '', nil, {mode=mode, find=find, p=p}
+
+  if parsed_section.nodes_attr and #parsed_section.nodes_attr>0 then
     middle_block = generate_code_for_attributes(parsed_section.nodes_attr, middle_block)
   end
 
-  if parsed_section.attrs and #parsed_section.attrs>1 then
+  if parsed_section.attrs and #parsed_section.attrs>0 then
     middle_block = generate_code_for_attributes(parsed_section.attrs, middle_block)
   end
 
-  if parsed_section.pseudos and #parsed_section.pseudos>1 then
+  if parsed_section.pseudos and #parsed_section.pseudos>0 then
     first_block, last_block = generate_code_for_pseudos(parsed_section.pseudos, first_block, last_block)
   end
 
-  local method = loadstring("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "  end\n  return cmp\nend\nreturn fn_cmp()")
-  local env    = {mode=mode, find=find}
+  --p("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "\n   return true\n   end\n  return cmp\nend\nreturn fn_cmp()")
+  method = loadstring("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "\n   return true\n   end\n  return cmp\nend\nreturn fn_cmp()")
   return method and setfenv(method(), env) or nil
 end
 
@@ -301,15 +305,55 @@ function pumakira.new()
 
   local parsed, this = '', {}
 
+  local function traverse_elements(fn, current_element, result, opts) -- limit, uniqueness) 
+    -- {limit=-1, uniqueness={}, relation=1}
+    -- (0)   all children, grandchildren and so on ...
+    -- (1) > children
+    -- (2) ~ all next siblings
+    -- (3) + next sibling
+    
+
+    if opts.limit==0 then 
+      return
+    else
+      opts.limit = opts.limit - 1
+    end
+
+    if fn(current_element) and not opts.uniqueness[current_element.unique_id] then
+      if opts.relation==1 then
+        insert(result, current_element)
+      else
+
+      end
+      opts.uniqueness[current_element.unique_id] = true
+    end
+
+    if not current_element.children and #current_element==0 then
+      return
+    end
+
+    local traversable_elements = current_element.children and current_element.children or current_element
+
+    for i=1, #traversable_elements do
+      if opts.found and not opts.uniqueness[traversable_elements[i]] then
+        insert(result, traversable_elements[i])
+        if opts.relation==3 then
+          opts.found=false
+        end
+      else
+        traverse_elements(fn, traversable_elements[i], result, opts)
+      end
+    end
+
+    if opts.found and opts.relation>1 then
+      opts.found = false
+    end
+  end
+
   this = {
     
     dump  = function(self, x)
       log(x)
-    end,
-
-    add_filter = function(self, name, fn, is_iterative)
-      is_iterative = is_iterative==nil and true or is_iterative
-      self.filters[(is_iterative and 'iterative' or 'after')][name] = fn
     end,
 
     parse = function(self, s)
@@ -331,9 +375,11 @@ function pumakira.new()
         -- parse text
         text    = sub(s, i, ni-1)
         if not find(text, "^[%s%c]*$") then
+          --p(label, top.unique_id, #top.children)
           insert(
             top.children, 
             {
+              index     = #top.children+1,
               data      = text, 
               type      = mode.text,
               unique_id = unique_id,
@@ -345,12 +391,14 @@ function pumakira.new()
             insert(
               top.children,
               {
+                index      = #top.children+1,
                 name       = lower(label),
                 type       = sensitive_tags[label].mode,
                 attributes = {},
                 parent     = top.unique_id,
                 unique_id  = unique_id,
                 children   = {
+                  index     = 1,
                   data      = c, 
                   type      = mode.text,
                   parent    = unique_id,
@@ -361,6 +409,7 @@ function pumakira.new()
             insert(
               top.children, 
                 {
+                  index      = #top.children+1,
                   name       = lower(label),
                   type       = mode.tag,
                   attributes = parse_attributes(xarg),
@@ -370,7 +419,9 @@ function pumakira.new()
                 })
           end
         elseif c == "" then   -- start tag
+          --p(label, unique_id, stack)
           top = {
+            index      = 1,
             name       = lower(label),
             attributes = parse_attributes(xarg),
             type       = mode.tag,
@@ -389,6 +440,7 @@ function pumakira.new()
             error("trying to close "..toclose.label.." with "..label)
           end
           toclose.parent = top.unique_id or 0
+          toclose.index  = #top.children + 1
           insert(top.children, toclose)
         end
         i = j+1
@@ -398,6 +450,7 @@ function pumakira.new()
         insert(
           stack[#stack].children, 
           {
+            index     = #stack[#stack].children+1,
             data      = text, 
             type      = mode.text,
             parent    = stack[#stack].unique_id,
@@ -522,26 +575,45 @@ function pumakira.new()
     end,
 
     query = function(self, selector, current_element)
+      local parsed_selector, limit, result, old_result, uniqueness
+            = parse_selector(selector), -1, {}, {}, {}
+      self:dump(parsed_selector)
 
-      local parsed_selector = parse_selector(selector)
-
-      --log("ha!")
-      --log(2000)
-      --log(true)
-      --log({foo = "bar\t\r"})
-
-      --self:dump(parsed_selector)
-
+      p(parsed_selector)
+      --
+      traverse_elements(
+          generate_and_evaluate_code(parsed_selector[1]),
+          (current_element or parsed),
+          result,
+          limit,
+          uniqueness
+        )
+      --
+      limit = (parsed_selector[1].relation=='+' or parsed_selector[1].relation=='>') and 1 or -1
+      remove(parsed_selector, 1)
+      --
       for i=1, #parsed_selector do
-        ---p(' + + + + ')
-        --self:dump(parsed_selector[i])
+        --
+        old_result = result
+        result     = {}
+        uniqueness = {}
+        --
+        traverse_elements(
+            generate_and_evaluate_code(parsed_selector[i]),
+            old_result,
+            result,
+            limit,
+            uniqueness
+          )
+        --
+        limit = (parsed_selector[i].relation=='+' or parsed_selector[i].relation=='>') and 1 or -1
       end
 
-    end,
-
-    filters = filters,
-
-    mode = mode
+      -- uniquiness
+      p(result)
+    end
+    --filters = filters,
+    --mode = mode
   }
   setmetatable(this, pumakira)
   return this

@@ -60,4 +60,12 @@ local function simple_dump(data, depth)
   end
 end
 
-return {dump = simple_dump}
+local function log(...)
+  local args, i = {...}, 1
+  for i=1, #args do
+    args[i] = simple_dump(args[i], 2)
+  end
+  process.stdout:write(concat(args, "\t") .. "\n")
+end
+
+return {dump = simple_dump, log = log}

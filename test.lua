@@ -1,4 +1,5 @@
 local pumakira = require './pumakira'
+local utils    = require './utils'
 
 local instance, instance2 = pumakira.new(), pumakira.new()
 
@@ -26,9 +27,9 @@ local stream2 = [[
                       </style>
                     </head>
                     <body>
-                      <div>first div</div>
+                      <div class='ninroot'>first div</div>
                       <h2>titulo</h2>
-                      <div>
+                      <div class='ninroot'>
                         <h2>foo master</h2>
                         <br /><br /><br> 
                         <div>ton solo div</div>
@@ -43,9 +44,9 @@ local stream2 = [[
                           </ul>
                         </div>
                       </div>
-                    <p class='peligro'>whatchout man!</p>
-                  </body>
-                </html>]]
+                      <p class='peligro'>whatchout man!</p>
+                    </body>
+                  </html>]]
 
 -- parse 
 instance:parse(stream)
@@ -63,5 +64,16 @@ print(test[1].attributes.id=='blocks')
 print(test[2].name=='p')
 print(test[2].children[1].data=='whatchout man!')
 
---instance2:query("div div[id='barclays'] ul[class] li:even")
---instance2:query("ul[class='senses'] li:contains('lorem'):first")
+
+
+p(' >> ')
+instance2:query('div div[id="barclays"]')
+p(' >>> ')
+instance2:query('div[id="barclays"] > ul[class]')
+p(' >>>> ')
+instance2:query("div > div[id='barclays']~ul[class]+li:even")
+p(' >>>>> ')
+instance2:query("ul[class='senses'] li:contains('lorem'):first")
+p(' >>>>>> ')
+instance:query("h2#joe[class='show man', rev='foll', alt*='not at all'][width=200]:contains('bla bla bla'):even")
+
