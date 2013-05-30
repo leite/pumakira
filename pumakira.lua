@@ -1,7 +1,7 @@
 local s, t, m, o, u = require 'string', require 'table', require 'math', require 'os', require './utils'
 
-local match, gsub, char, format, insert, remove, concat, find, sub, len, lower, mod, rnd_seed, rnd, time, dump
-  = s.match, s.gsub, s.char, s.format, t.insert, t.remove, t.concat, s.find, s.sub, s.len, s.lower, m.mod, m.randomseed, m.random, o.time, u.dump
+local match, gsub, char, format, insert, remove, concat, find, sub, len, lower, rnd_seed, rnd, time, dump
+  = s.match, s.gsub, s.char, s.format, t.insert, t.remove, t.concat, s.find, s.sub, s.len, s.lower, m.randomseed, m.random, o.time, u.dump
 
 s, t, m, o, u = nil, nil, nil, nil, nil
     
@@ -103,8 +103,8 @@ local filters = {
     eq       = "$i==$val",
     gt       = "$i>$val",
     lt       = "$i<$val",
-    even     = "mod($i, 2)==1",
-    odd      = "mod($i, 2)==0",
+    even     = "($i % 2)==1",
+    odd      = "($i % 2)==0",
     first    = "$i==1"
   },
   after = {
@@ -303,15 +303,15 @@ end
 
 function pumakira.new()
 
-  local parsed, this = '', {}
+  local parsed, cache, relations, options, this = 
+        '', {},  {['>']=1, ['~']=2, ['+']=3}, {uniqueness={}, limit=-1, found=false, relation=0}, {}
 
-  local function traverse_elements(fn, current_element, result, opts) -- limit, uniqueness) 
-    -- {limit=-1, uniqueness={}, relation=1}
+  local function traverse_elements(fn, current_element, result, opts)
+    
     -- (0)   all children, grandchildren and so on ...
     -- (1) > children
     -- (2) ~ all next siblings
     -- (3) + next sibling
-    
 
     if opts.limit==0 then 
       return
@@ -320,10 +320,10 @@ function pumakira.new()
     end
 
     if fn(current_element) and not opts.uniqueness[current_element.unique_id] then
-      if opts.relation==1 then
+      if opts.relation<2 then
         insert(result, current_element)
       else
-
+        opts.found = true
       end
       opts.uniqueness[current_element.unique_id] = true
     end
@@ -357,8 +357,9 @@ function pumakira.new()
     end,
 
     parse = function(self, s)
-      local stack, top, i, j, unique_id = {}, {children={}}, 1, 1, 0
-      local ni, c, label, xarg, empty, text
+      local stack, top, i, j, unique_id, ni, c, label, xarg, empty, text = 
+            {}, {children={}}, 1, 1, 0, nil, nil, nil, nil, nil, nil
+      --local ni, c, label, xarg, empty, text
       insert(stack, top)
       while true do
         ni, j, c, label, xarg, empty = find(s, "<(%/?%??)([%w:%!%-%-%[]+)(.-)(%/?)>", i)    
@@ -575,45 +576,45 @@ function pumakira.new()
     end,
 
     query = function(self, selector, current_element)
-      local parsed_selector, limit, result, old_result, uniqueness
-            = parse_selector(selector), -1, {}, {}, {}
-      self:dump(parsed_selector)
+      local ps, result, old_result = parse_selector(selector), {}, {}
 
-      p(parsed_selector)
+      self:dump(ps)
       --
+      options.relation = ps[2] and (relations[ps[2].relation] or 0) or 0
+      options.limit    = options.relation==1 and 1 or -1
       traverse_elements(
-          generate_and_evaluate_code(parsed_selector[1]),
+          generate_and_evaluate_code(ps[1]),
           (current_element or parsed),
           result,
-          limit,
-          uniqueness
+          options
         )
       --
-      limit = (parsed_selector[1].relation=='+' or parsed_selector[1].relation=='>') and 1 or -1
-      remove(parsed_selector, 1)
+      remove(ps, 1)
       --
-      for i=1, #parsed_selector do
+      for i=1, #ps do
         --
-        old_result = result
-        result     = {}
-        uniqueness = {}
+        old_result         = result
+        result             = {}
+        options.uniqueness = {}
+        options.relation   = ps[i+1] and (relations[ps[i+1].relation] or 0) or 0
+        options.limit      = options.relation==1 and 1 or -1
         --
         traverse_elements(
-            generate_and_evaluate_code(parsed_selector[i]),
+            generate_and_evaluate_code(ps[i]),
             old_result,
             result,
-            limit,
-            uniqueness
+            options
           )
-        --
-        limit = (parsed_selector[i].relation=='+' or parsed_selector[i].relation=='>') and 1 or -1
       end
 
-      -- uniquiness
+      -- reset
+      options.uniqueness = {}
+      options.limit      = -1
+      options.found      = false
+      options.relation   = 0
+      --
       p(result)
     end
-    --filters = filters,
-    --mode = mode
   }
   setmetatable(this, pumakira)
   return this
