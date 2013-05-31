@@ -177,41 +177,42 @@ end
 
 local function parse_selector(selector)
   -- consider using LPEG ...
-  local inits, _inits, ends, _ends, relation, _relation, nodes, _nodes, __, pseudo, _pseudo, content, last_ending, parsed_selector, x = 
-        1, 1, 1, 1, '', '', '', '', '', '', '', '', 1, {}, 1
+  local inits, _inits, ends, _ends, raw, _raw, relation, _relation, nodes, _nodes, __, pseudo, _pseudo, content, last_ending, parsed_selector, x = 
+        1, 1, 1, 1, '', '', '', '', '', '', '', '', '', '', 1, {}, 1
   -- a hundred conditions blocks, i think its fair ... safe way against pattern bug
   for x=1, 100 do
     -- matches 'p' 'p:first' ...'>div' ...'+div:last'
-    _inits, _ends, _relation, __, _nodes, _pseudo = find(selector, "%s*([%+~>]*)%s*(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*)", last_ending)
+    _inits, _ends, _raw, _relation, __, _nodes, _pseudo = find(selector, "(([%s%+~>]*)(:?)([#%.%w%d]+):?([^%s?%+?~?>?]*))", last_ending)
     -- matches 'p:eq(1)' ':contains("the invaluable darkness")' '>div[class="boredoom", alt~="nil"]' '[attr="foo bar"]'
-    inits, ends, relation, nodes, pseudo, content = find(selector, "%s*([%+~>]*)%s*([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?", last_ending)
+    inits, ends, raw, relation, nodes, pseudo, content = find(selector, "(([%s%+~>]*)([#%.%w%d]*):?([%w]*)[%(%[]+([^%]?%)?]*)[%]%)]?)", last_ending)
     -- end loop when theres nothing to parse anymore or high number of loops, wich indicates error :(
     if inits==nil and _inits==nil then
       break
     end
-    --p(relation, nodes, pseudo, ends, content, _relation, _nodes, _pseudo, _ends, _content)
     -- fix node+attr+pseudo occurences
-    if __==":" then _pseudo = _nodes _nodes  = '' end
+    if __==":" then 
+      _pseudo = _nodes 
+      _nodes  = '' 
+    end
     -- check which pattern achieved result or best result
     if inits==nil then
-      relation, nodes, pseudo, ends, content = _relation, _nodes, _pseudo, _ends, ''
+      raw, relation, nodes, pseudo, ends, content = _raw, _relation, _nodes, _pseudo, _ends, ''
     else
       if _inits~=nil then
         if inits>_inits then
-          relation, nodes, pseudo, ends, content = _relation, _nodes, _pseudo, _ends, ''
+          raw, relation, nodes, pseudo, ends, content = _raw, _relation, _nodes, _pseudo, _ends, ''
         end
       end
     end
-    --
-    --p(relation, nodes, pseudo, ends, content, _relation, _nodes, _pseudo, _ends, _content)
     -- join conditions/pseudos when possible
     if relation=='' and x>1 then
+      parsed_selector[#parsed_selector].raw = parsed_selector[#parsed_selector].raw .. raw
       parse_selector_nodes(nodes, parsed_selector[#parsed_selector].nodes_attr)
       parse_selector_attributes(content, parsed_selector[#parsed_selector].attrs, parsed_selector[#parsed_selector].pseudos, pseudo)
     else 
-      local test = {relation='', attrs={}, nodes_attr={}, pseudos={}}
-      test.relation = relation
-      parse_selector_nodes(nodes,   test.nodes_attr)
+      local test    = {relation='', attrs={}, nodes_attr={}, pseudos={}, raw=gsub(raw, "[%s%+~>]*(.)%s*", "%1")}
+      test.relation = gsub(relation, "%s*(.)%s*", "%1")
+      parse_selector_nodes(nodes, test.nodes_attr)
       parse_selector_attributes(content, test.attrs, test.pseudos, pseudo)
       insert(parsed_selector, test)
     end
@@ -304,44 +305,47 @@ end
 function pumakira.new()
 
   local parsed, cache, relations, options, this = 
-        '', {},  {['>']=1, ['~']=2, ['+']=3}, {uniqueness={}, limit=-1, found=false, relation=0}, {}
+        '', {},  {['>']=1, ['~']=2, ['+']=3}, {uniqueness={}, found=false, relation=0}, {}
 
-  local function traverse_elements(fn, current_element, result, opts)
+  local function traverse_elements(fn, current_element, result, opts, limit)
     
     -- (0)   all children, grandchildren and so on ...
     -- (1) > children
     -- (2) ~ all next siblings
     -- (3) + next sibling
 
-    if opts.limit==0 then 
-      return
-    else
-      opts.limit = opts.limit - 1
-    end
-
+    --p(current_element.name, 'hehe', limit)
+    
+    --p(current_element.name, current_element.attributes)
     if fn(current_element) and not opts.uniqueness[current_element.unique_id] then
       if opts.relation<2 then
+        --p('not found ... insert')
         insert(result, current_element)
       else
+        --p('found!')
         opts.found = true
       end
       opts.uniqueness[current_element.unique_id] = true
     end
 
-    if not current_element.children and #current_element==0 then
+    if (not current_element.children and #current_element==0) or limit==0 then
       return
     end
 
     local traversable_elements = current_element.children and current_element.children or current_element
 
     for i=1, #traversable_elements do
+      --if opts.found then
+      --  p('was found, id is '..current_element.name)
+      --end
       if opts.found and not opts.uniqueness[traversable_elements[i]] then
         insert(result, traversable_elements[i])
         if opts.relation==3 then
           opts.found=false
         end
       else
-        traverse_elements(fn, traversable_elements[i], result, opts)
+        traverse_elements(fn, traversable_elements[i], result, opts, limit-1)
+        --p(limit)
       end
     end
 
@@ -433,7 +437,7 @@ function pumakira.new()
           insert(stack, top)   -- new level
         else  -- end tag
           local toclose = remove(stack)  -- remove top
-          top = stack[#stack]
+          top           = stack[#stack]
           if #stack < 1 then
             error("nothing to close with "..label)
           end
@@ -576,17 +580,19 @@ function pumakira.new()
     end,
 
     query = function(self, selector, current_element)
-      local ps, result, old_result = parse_selector(selector), {}, {}
+      local ps, result, old_result, limit = parse_selector(selector), {}, {}, -1
 
       self:dump(ps)
       --
       options.relation = ps[2] and (relations[ps[2].relation] or 0) or 0
-      options.limit    = options.relation==1 and 1 or -1
+      cache[ps[1].raw] = cache[ps[1].raw] or generate_and_evaluate_code(ps[1])
+      limit            = options.relation>1 and 2 or -1
       traverse_elements(
-          generate_and_evaluate_code(ps[1]),
+          cache[ps[1].raw],
           (current_element or parsed),
           result,
-          options
+          options,
+          limit
         )
       --
       remove(ps, 1)
@@ -597,23 +603,36 @@ function pumakira.new()
         result             = {}
         options.uniqueness = {}
         options.relation   = ps[i+1] and (relations[ps[i+1].relation] or 0) or 0
-        options.limit      = options.relation==1 and 1 or -1
+        cache[ps[i].raw]   = cache[ps[i].raw] or generate_and_evaluate_code(ps[i])
+        limit              = options.relation>1 and 2 or -1
+        --p(options, limit, old_result)
+        --self:dump(old_result)
+        if ps[i].raw=="blockquote[class]" then
+          self:dump(old_result)
+          p(ps[i].raw, limit)
+        end
+        
         --
         traverse_elements(
-            generate_and_evaluate_code(ps[i]),
+            cache[ps[i].raw],
             old_result,
             result,
-            options
+            options,
+            limit
           )
+        --
       end
 
       -- reset
       options.uniqueness = {}
-      options.limit      = -1
       options.found      = false
       options.relation   = 0
       --
       p(result)
+    end,
+
+    dump_cache = function(self)
+      self:dump(cache)
     end
   }
   setmetatable(this, pumakira)
