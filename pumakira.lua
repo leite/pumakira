@@ -235,7 +235,7 @@ end
 
 -- generate code for pseudos
 local function generate_code_for_pseudos(pseudos, first_code_block, main_code_block)
-  local counter_var, counter, i = '', 'local ', 0 
+  local counter_var, counter, i = '', 'current_parent, ', 0 
   for i=1, #pseudos do
     counter_var      = '_'..char(i+96)
     counter          = counter.. (i==1 and '' or ', ')..counter_var
@@ -247,7 +247,8 @@ local function generate_code_for_pseudos(pseudos, first_code_block, main_code_bl
         make_pseudo_checker(pseudos[i][1], pseudos[i][2], counter_var)
       )
   end
-  return counter .. ' = ' .. first_code_block, main_code_block
+  return format("local %s = 0.0, %s", counter, first_code_block), 
+         format("\n    if e.parent~=current_parent then %s = e.parent, %s end\n%s", counter, first_code_block, main_code_block)
 end
 
 -- generate code for attributes
@@ -278,7 +279,7 @@ end
 
 -- generate code and evaluate to comparator closure
 local function generate_and_evaluate_code(parsed_section)
-  local first_block, middle_block, last_block, method, env = '', '', '', nil, {mode=mode, find=find, p=p}
+  local first_block, middle_block, last_block, method, env = '', '', '', nil, {mode=mode, find=find}
 
   if parsed_section.nodes_attr and #parsed_section.nodes_attr>0 then
     middle_block = generate_code_for_attributes(parsed_section.nodes_attr, middle_block)
@@ -292,8 +293,14 @@ local function generate_and_evaluate_code(parsed_section)
     first_block, last_block = generate_code_for_pseudos(parsed_section.pseudos, first_block, last_block)
   end
 
-  --p("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "\n   return true\n   end\n  return cmp\nend\nreturn fn_cmp()")
-  method = loadstring("local function fn_cmp()\n  ".. first_block .."\n  local function cmp(e)\n".. middle_block .. last_block .. "\n   return true\n   end\n  return cmp\nend\nreturn fn_cmp()")
+  method = loadstring(
+            format(
+              "local function fn_cmp()\n  %s\n  local function cmp(e)" ..
+              "\n%s%s\n  return true\n  end\n  return cmp\nend\nreturn fn_cmp()",
+              first_block,
+              middle_block,
+              last_block
+            ))
   return method and setfenv(method(), env) or nil
 end
 
@@ -314,15 +321,10 @@ function pumakira.new()
     -- (2) ~ all next siblings
     -- (3) + next sibling
 
-    --p(current_element.name, 'hehe', limit)
-    
-    --p(current_element.name, current_element.attributes)
     if fn(current_element) and not opts.uniqueness[current_element.unique_id] then
       if opts.relation<2 then
-        --p('not found ... insert')
         insert(result, current_element)
       else
-        --p('found!')
         opts.found = true
       end
       opts.uniqueness[current_element.unique_id] = true
@@ -335,9 +337,7 @@ function pumakira.new()
     local traversable_elements = current_element.children and current_element.children or current_element
 
     for i=1, #traversable_elements do
-      --if opts.found then
-      --  p('was found, id is '..current_element.name)
-      --end
+      --
       if opts.found and not opts.uniqueness[traversable_elements[i]] then
         insert(result, traversable_elements[i])
         if opts.relation==3 then
@@ -345,7 +345,6 @@ function pumakira.new()
         end
       else
         traverse_elements(fn, traversable_elements[i], result, opts, limit-1)
-        --p(limit)
       end
     end
 
@@ -363,8 +362,9 @@ function pumakira.new()
     parse = function(self, s)
       local stack, top, i, j, unique_id, ni, c, label, xarg, empty, text = 
             {}, {children={}}, 1, 1, 0, nil, nil, nil, nil, nil, nil
-      --local ni, c, label, xarg, empty, text
+      --
       insert(stack, top)
+      --
       while true do
         ni, j, c, label, xarg, empty = find(s, "<(%/?%??)([%w:%!%-%-%[]+)(.-)(%/?)>", i)    
         label = label and lower(label) or nil
@@ -380,7 +380,6 @@ function pumakira.new()
         -- parse text
         text    = sub(s, i, ni-1)
         if not find(text, "^[%s%c]*$") then
-          --p(label, top.unique_id, #top.children)
           insert(
             top.children, 
             {
@@ -424,7 +423,6 @@ function pumakira.new()
                 })
           end
         elseif c == "" then   -- start tag
-          --p(label, unique_id, stack)
           top = {
             index      = 1,
             name       = lower(label),
@@ -518,7 +516,6 @@ function pumakira.new()
         end
       end
       if self:test_element(options, current_element) then
-        --log('found ... inserting', current_element, found)
         insert(found, current_element)
       end
       if limit>-1 and #found>=limit then
@@ -605,13 +602,11 @@ function pumakira.new()
         options.relation   = ps[i+1] and (relations[ps[i+1].relation] or 0) or 0
         cache[ps[i].raw]   = cache[ps[i].raw] or generate_and_evaluate_code(ps[i])
         limit              = options.relation>1 and 2 or -1
-        --p(options, limit, old_result)
-        --self:dump(old_result)
+        --
         if ps[i].raw=="blockquote[class]" then
           self:dump(old_result)
           p(ps[i].raw, limit)
         end
-        
         --
         traverse_elements(
             cache[ps[i].raw],
@@ -622,7 +617,6 @@ function pumakira.new()
           )
         --
       end
-
       -- reset
       options.uniqueness = {}
       options.found      = false
